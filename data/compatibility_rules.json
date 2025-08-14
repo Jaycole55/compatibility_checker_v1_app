@@ -1,0 +1,75 @@
+{
+  "brands": {
+    "Square D": {
+      "series": {
+        "QO": {
+          "breaker_families": ["QO", "QOB"],
+          "notes": "QO load centers/panels accept QO family breakers. Do not mix with Homeline (HOM)."
+        },
+        "Homeline": {
+          "breaker_families": ["HOM"],
+          "notes": "Homeline load centers accept HOM breakers. Do not mix with QO."
+        }
+      }
+    },
+    "Siemens": {
+      "series": {
+        "QP": {
+          "breaker_families": ["QP", "QPF2", "QAF2"],
+          "notes": "Siemens QP family fits compatible Siemens load centers."
+        }
+      }
+    },
+    "Eaton": {
+      "series": {
+        "BR": {
+          "breaker_families": ["BR", "BRAF", "BRD"],
+          "notes": "Eaton BR load centers accept BR-frame breakers."
+        },
+        "CH": {
+          "breaker_families": ["CH", "CHF"],
+          "notes": "Eaton CH load centers accept CH-frame breakers."
+        }
+      }
+    },
+    "GE": {
+      "series": {
+        "THQL": {
+          "breaker_families": ["THQL", "THQP"],
+          "notes": "GE THQL/THQP breakers for compatible GE panels."
+        }
+      }
+    },
+    "Leviton": {
+      "series": {
+        "Smart": {
+          "breaker_families": ["Smart AFCI", "Smart GFCI"],
+          "notes": "Leviton smart breakers for Leviton smart load centers."
+        }
+      }
+    }
+  },
+  "nema_enclosures": {
+    "1": "Indoor, general purpose. No protection against moisture.",
+    "3R": "Outdoor rainproof. Protects against falling rain and sleet.",
+    "4": "Watertight, dust-tight. Indoor/outdoor washdown.",
+    "4X": "Like NEMA 4 with additional corrosion resistance (stainless/fiberglass)."
+  },
+  "plug_receptacle": {
+    "NEMA 5-15": {"voltage": "125V", "phase": "1Ø", "amps": 15},
+    "NEMA 5-20": {"voltage": "125V", "phase": "1Ø", "amps": 20},
+    "NEMA 6-15": {"voltage": "250V", "phase": "1Ø", "amps": 15},
+    "NEMA 6-20": {"voltage": "250V", "phase": "1Ø", "amps": 20},
+    "NEMA 14-50": {"voltage": "125/250V", "phase": "1Ø", "amps": 50},
+    "NEMA 6-50": {"voltage": "250V", "phase": "1Ø", "amps": 50}
+  },
+  "ev_charger_rules": {
+    "note": "Continuous load sizing: branch-circuit rating should be >= 125% of EVSE output current per NEC 625.41/210.20(A). Verify locally.",
+    "examples": {
+      "32A EVSE": {"min_breaker": 40},
+      "40A EVSE": {"min_breaker": 50},
+      "48A EVSE": {"min_breaker": 60}
+    }
+  },
+  "disclaimer": "This tool is an aid only. Always verify with manufacturer documentation and local codes. Do not mix brands/series unless listed for the panel."
+}
