@@ -1,26 +1,87 @@
 import json
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
-
-import streamlit as st
 from urllib.parse import quote_plus
 
-# --- Streamlit page config MUST be the first st.* call ---
+import streamlit as st
+
+# -------------------------------
+# Page config (MUST be first st.*)
+# -------------------------------
 st.set_page_config(page_title="Compatibility Checker", page_icon="✅", layout="wide")
 
-# ---------- Load rules ----------
-@st.cache_data
+# -------------------------------
+# Defaults / fallbacks
+# -------------------------------
+DEFAULT_ROUTES: Dict[str, str] = {
+    "breakers":     "https://www.cityelectricsupply.com/circuit-breakers",
+    "panels":       "https://www.cityelectricsupply.com/panelboards-load-centers",
+    "receptacles":  "https://www.cityelectricsupply.com/receptacles-3",
+    "plugs":        "https://www.cityelectricsupply.com/search?searchTerm=plugs",
+    "ev":           "https://www.cityelectricsupply.com/ev-charging-stations-2",
+    "accessories":  "https://www.cityelectricsupply.com/meter-base-accessories",
+}
+DEFAULT_DISCLAIMER = (
+    "This tool is an aid only. Always verify with manufacturer documentation and local codes. "
+    "Do not mix brands/series unless listed for the panel."
+)
+
+# -------------------------------
+# Load rules (with auto-refresh)
+# -------------------------------
+@st.cache_data(ttl=60)  # refresh cache every 60s; you can raise/lower later
 def load_rules() -> Dict[str, Any]:
-    with open("data/compatibility_rules.json") as f:
-        return json.load(f)
+    try:
+        with open("data/compatibility_rules.json", "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-RULES = load_rules()
+RULES: Dict[str, Any] = load_rules()
 
-# ---------- Utilities ----------
-BRANDS = list(RULES["brands"].keys())
+# Convenience accessors with fallbacks
+def get_routes() -> Dict[str, str]:
+    routes = RULES.get("routes")
+    if isinstance(routes, dict) and routes:
+        return routes
+    return DEFAULT_ROUTES
 
-# Map token -> (brand, series) to help guess from pasted text
+def get_disclaimer() -> str:
+    return RULES.get("disclaimer") or DEFAULT_DISCLAIMER
+
+# -------------------------------
+# Regex helpers
+# -------------------------------
+NEMA_REGEX  = re.compile(r"NEMA\s*(\d+X?|\dR)", re.IGNORECASE)
+PLUG_REGEX  = re.compile(r"NEMA\s*(\d{1,2}-\d{2})", re.IGNORECASE)
+VOLT_REGEX  = re.compile(r"(\d{3})(?:/\d{3})?\s*V|(\d{3})\s*VAC|(\d{3})\s*Volts", re.IGNORECASE)
+AMP_REGEX   = re.compile(r"(\d{1,3})\s*A\b", re.IGNORECASE)
+PHASE_REGEX = re.compile(r"\b(1[ -]?[PØ]|3[ -]?[PØ]|single[- ]?phase|three[- ]?phase)\b", re.IGNORECASE)
+POLE_REGEX  = re.compile(r"\b(\d)[ -]?(pole|p)\b", re.IGNORECASE)
+
+# -------------------------------
+# Data model
+# -------------------------------
+@dataclass
+class ParsedSpecs:
+    product_type: str = ""         # panel, breaker, receptacle, plug, evse, unknown
+    brand: str = ""
+    series: str = ""
+    model: str = ""
+    voltage: str = ""
+    phase: str = ""
+    amps: Optional[int] = None
+    poles: Optional[int] = None
+    nema_enclosure: str = ""
+    plug_config: str = ""          # e.g., NEMA 14-50
+    raw_excerpt: str = ""          # for debugging / audit
+
+# -------------------------------
+# Utilities
+# -------------------------------
+BRANDS: List[str] = list(RULES.get("brands", {}).keys())
+
 SERIES_TOKENS = {
     "QO": ("Square D", "QO"),
     "HOMELINE": ("Square D", "Homeline"),
@@ -36,35 +97,10 @@ SERIES_TOKENS = {
 }
 
 def brand_series_query(brand: str, series: str) -> str:
-    """Build a query string we can append to CES category URLs."""
     if not brand or not series:
         return ""
     return f"?brand={quote_plus(brand)}&family={quote_plus(series)}"
 
-# Regex helpers
-NEMA_REGEX  = re.compile(r"NEMA\s*(\d+X?|\dR)", re.IGNORECASE)
-PLUG_REGEX  = re.compile(r"NEMA\s*(\d{1,2}-\d{2})", re.IGNORECASE)
-VOLT_REGEX  = re.compile(r"(\d{3})(?:/\d{3})?\s*V|(\d{3})\s*VAC|(\d{3})\s*Volts", re.IGNORECASE)
-AMP_REGEX   = re.compile(r"(\d{1,3})\s*A\b", re.IGNORECASE)
-PHASE_REGEX = re.compile(r"\b(1[ -]?[PØ]|3[ -]?[PØ]|single[- ]?phase|three[- ]?phase)\b", re.IGNORECASE)
-POLE_REGEX  = re.compile(r"\b(\d)[ -]?(pole|p)\b", re.IGNORECASE)
-
-# ---------- Data model ----------
-@dataclass
-class ParsedSpecs:
-    product_type: str = ""         # panel, breaker, receptacle, plug, evse, unknown
-    brand: str = ""
-    series: str = ""
-    model: str = ""
-    voltage: str = ""
-    phase: str = ""
-    amps: Optional[int] = None
-    poles: Optional[int] = None
-    nema_enclosure: str = ""
-    plug_config: str = ""          # e.g., NEMA 14-50
-    raw_excerpt: str = ""          # for debugging / audit
-
-# ---------- Parsing ----------
 def detect_product_type(text: str) -> str:
     t = text.lower()
     if any(k in t for k in ["load center", "panelboard", "loadcenter", "panel "]):
@@ -114,7 +150,7 @@ def parse_product_info(pasted: str) -> ParsedSpecs:
     if m_amp:
         try:
             ps.amps = int(m_amp.group(1))
-        except:
+        except Exception:
             pass
 
     m_phase = PHASE_REGEX.search(text)
@@ -126,7 +162,7 @@ def parse_product_info(pasted: str) -> ParsedSpecs:
     if m_poles:
         try:
             ps.poles = int(m_poles.group(1))
-        except:
+        except Exception:
             pass
 
     m_nema = NEMA_REGEX.search(text)
@@ -163,7 +199,7 @@ def check_panel_breaker_compat(ps_panel: ParsedSpecs, ps_breaker: ParsedSpecs) -
         result["reasons"].append("No breaker family mapping found for this panel series (expand rules).")
         return result
 
-    # Heuristic: infer breaker family from model tokens
+    # Heuristic: infer breaker family from model/series tokens
     inferred_family = None
     for fam in fams:
         if fam.lower() in (ps_breaker.model + " " + ps_breaker.series).lower():
@@ -178,12 +214,11 @@ def check_panel_breaker_compat(ps_panel: ParsedSpecs, ps_breaker: ParsedSpecs) -
         )
         result["suggestions"].append(f"Use breaker family: {', '.join(fams)}")
 
-    # Basic electrical sanity checks
+    # Basic sanity hints
     if ps_breaker.amps and ps_panel.amps and ps_breaker.amps > ps_panel.amps:
         result["reasons"].append("Breaker amp rating exceeds panel main rating; verify application.")
 
     if ps_panel.phase and ps_breaker.poles:
-        # Not strict code—just hints
         if ps_panel.phase == "1Ø" and ps_breaker.poles not in (1, 2):
             result["reasons"].append("Pole count atypical for single-phase panels (check spec).")
         if ps_panel.phase == "3Ø" and ps_breaker.poles not in (2, 3):
@@ -192,13 +227,12 @@ def check_panel_breaker_compat(ps_panel: ParsedSpecs, ps_breaker: ParsedSpecs) -
     return result
 
 def check_plug_receptacle(ps_a: ParsedSpecs, ps_b: ParsedSpecs) -> Dict[str, Any]:
-    # Match either direction
     A = ps_a.plug_config or ""
     B = ps_b.plug_config or ""
     type_a = ps_a.product_type
     type_b = ps_b.product_type
 
-    details = RULES["plug_receptacle"]
+    details = RULES.get("plug_receptacle", {})
     result = {"compatible": False, "reasons": [], "suggestions": []}
 
     if type_a == type_b:
@@ -213,7 +247,7 @@ def check_plug_receptacle(ps_a: ParsedSpecs, ps_b: ParsedSpecs) -> Dict[str, Any
     if config in details:
         result["compatible"] = True
         result["suggestions"].append(
-            f"Both should be {config}. Verify voltage/amp rating: {details[config]['voltage']} / {details[config]['amps']}A."
+            f"Both should be {config}. Verify voltage/amp rating: {details[config].get('voltage','?')} / {details[config].get('amps','?')}A."
         )
     else:
         result["reasons"].append("NEMA configuration not recognized in rule set (expand rules).")
@@ -221,7 +255,6 @@ def check_plug_receptacle(ps_a: ParsedSpecs, ps_b: ParsedSpecs) -> Dict[str, Any
     return result
 
 def check_enclosure(ps: ParsedSpecs, required_env: str) -> Dict[str, Any]:
-    # Compare required environment (e.g., '3R' for outdoor) with product's NEMA enclosure
     result = {"compatible": False, "reasons": [], "suggestions": []}
     if not ps.nema_enclosure:
         result["reasons"].append("Product does not specify a NEMA enclosure rating.")
@@ -241,15 +274,14 @@ def check_enclosure(ps: ParsedSpecs, required_env: str) -> Dict[str, Any]:
     return result
 
 def ev_breaker_sizing(evse_amp_output: int) -> Dict[str, Any]:
-    # 125% rule (simplified): choose next standard breaker size at/above 1.25x
-    target = int(round(evse_amp_output * 1.25))
+    target = int(round(evse_amp_output * 1.25))  # 125%
     standard_sizes = [15, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     chosen = next((s for s in standard_sizes if s >= target), None)
     return {
         "evse_output_amps": evse_amp_output,
         "min_circuit_amps": target,
         "recommended_breaker": chosen,
-        "note": RULES["ev_charger_rules"]["note"],
+        "note": RULES.get("ev_charger_rules", {}).get("note", ""),
     }
 
 def section_header(title: str, subtitle: str = ""):
@@ -257,10 +289,17 @@ def section_header(title: str, subtitle: str = ""):
     if subtitle:
         st.caption(subtitle)
 
-# ---------- UI ----------
+# -------------------------------
+# UI
+# -------------------------------
 def main():
     st.title("Compatibility Checker (v1)")
     st.write("Reduce purchase doubt by verifying that parts work together. Paste specs now; enable URL mode later.")
+
+    # Dev helper to force a refresh of rules
+    if st.button("Reload rules (dev)"):
+        st.cache_data.clear()
+        st.rerun()
 
     with st.expander("Input mode", expanded=True):
         mode = st.radio(
@@ -368,9 +407,7 @@ def main():
                 st.write(res)
                 if res.get("compatible"):
                     fams = series_breaker_families(panel.brand, panel.series)
-                    st.success(
-                        f"Compatible. Accepted breaker families for {panel.brand} {panel.series}: {', '.join(fams)}"
-                    )
+                    st.success(f"Compatible. Accepted breaker families for {panel.brand} {panel.series}: {', '.join(fams)}")
                 else:
                     for r in res.get("reasons", []):
                         st.error(r)
@@ -390,49 +427,30 @@ def main():
                     for s in res2.get("suggestions", []):
                         st.info(s)
 
-        # Enclosure check
-        st.subheader("Environment / NEMA")
-        required_env = st.selectbox("Required environment", ["None", "1", "3R", "4", "4X"], index=0)
-        if required_env != "None":
-            target = ps_a or ps_b
-            if target:
-                env_res = check_enclosure(target, required_env)
-                st.write(env_res)
-                if env_res.get("compatible"):
-                    st.success(f"{target.nema_enclosure} meets or exceeds required {required_env}.")
-                else:
-                    for r in env_res.get("reasons", []):
-                        st.error(r)
-                    for s in env_res.get("suggestions", []):
-                        st.info(s)
-            else:
-                st.info("Parse at least one item to run enclosure check.")
-
     # EV Charger helper
     st.subheader("EV Charger Circuit Helper")
     ev_amp = st.number_input(
-        "EVSE output current (A)", min_value=0, max_value=100, value=0, step=2,
+        "EVSE output current (A)",
+        min_value=0, max_value=100, value=0, step=2,
         help="Nameplate continuous current output of the charger."
     )
     if ev_amp:
         ev = ev_breaker_sizing(ev_amp)
         st.write(ev)
-        st.success(
-            f"Recommend a breaker around {ev['recommended_breaker']}A (≥ {ev['min_circuit_amps']}A). {ev['note']}"
-        )
+        st.success(f"Recommend a breaker around {ev['recommended_breaker']}A (≥ {ev['min_circuit_amps']}A). {ev['note']}")
 
     # -----------------------------------------------------
     # Next steps / CTA
     # -----------------------------------------------------
     st.markdown("---")
-    st.caption(f"DEBUG routes: {bool(RULES.get('routes'))}")
-# or to inspect the actual dict:
-# st.json(RULES.get("routes", {}))
-
     section_header("Next steps / CTA")
 
-    routes = RULES.get("routes", {})
-    buttons: List[tuple[str, str]] = []
+    routes = get_routes()
+    # Debug: show whether JSON routes were used or defaults
+    st.caption(f"DEBUG routes present in JSON: {bool(RULES.get('routes'))}")
+    # st.json(routes)  # uncomment if you want to see the actual dict
+
+    buttons: List[tuple] = []
 
     # Prefer panel context to build deep links
     panel: Optional[ParsedSpecs] = None
@@ -485,8 +503,11 @@ def main():
             label2, url2 = buttons[i + 1]
             c2.link_button(label2, url2)
 
-    st.caption(RULES.get("disclaimer", ""))
+    st.caption(get_disclaimer())
 
-# ---------- Run ----------
+# -------------------------------
+# Run
+# -------------------------------
 if __name__ == "__main__":
     main()
+
