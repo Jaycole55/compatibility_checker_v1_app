@@ -1,4 +1,3 @@
-
 import json
 import re
 from dataclasses import dataclass, asdict
@@ -7,7 +6,7 @@ from typing import Dict, Any, List, Optional
 import streamlit as st
 from urllib.parse import quote_plus
 
-# --- Streamlit page config MUST be first st.* call ---
+# --- Streamlit page config MUST be the first st.* call ---
 st.set_page_config(page_title="Compatibility Checker", page_icon="✅", layout="wide")
 
 # ---------- Load rules ----------
@@ -20,8 +19,9 @@ RULES = load_rules()
 
 # ---------- Utilities ----------
 BRANDS = list(RULES["brands"].keys())
+
+# Map token -> (brand, series) to help guess from pasted text
 SERIES_TOKENS = {
-    # map token -> (brand, series)
     "QO": ("Square D", "QO"),
     "HOMELINE": ("Square D", "Homeline"),
     "HOM": ("Square D", "Homeline"),
@@ -36,20 +36,20 @@ SERIES_TOKENS = {
 }
 
 def brand_series_query(brand: str, series: str) -> str:
-    """Build a query string we can append to your CES category URLs."""
+    """Build a query string we can append to CES category URLs."""
     if not brand or not series:
         return ""
     return f"?brand={quote_plus(brand)}&family={quote_plus(series)}"
 
-
-NEMA_REGEX = re.compile(r"NEMA\s*(\d+X?|\dR)", re.IGNORECASE)
-PLUG_REGEX = re.compile(r"NEMA\s*(\d{1,2}-\d{2})", re.IGNORECASE)
-VOLT_REGEX = re.compile(r"(\d{3})(?:/\d{3})?\s*V|(\d{3})\s*VAC|(\d{3})\s*Volts", re.IGNORECASE)
-AMP_REGEX = re.compile(r"(\d{1,3})\s*A\b", re.IGNORECASE)
+# Regex helpers
+NEMA_REGEX  = re.compile(r"NEMA\s*(\d+X?|\dR)", re.IGNORECASE)
+PLUG_REGEX  = re.compile(r"NEMA\s*(\d{1,2}-\d{2})", re.IGNORECASE)
+VOLT_REGEX  = re.compile(r"(\d{3})(?:/\d{3})?\s*V|(\d{3})\s*VAC|(\d{3})\s*Volts", re.IGNORECASE)
+AMP_REGEX   = re.compile(r"(\d{1,3})\s*A\b", re.IGNORECASE)
 PHASE_REGEX = re.compile(r"\b(1[ -]?[PØ]|3[ -]?[PØ]|single[- ]?phase|three[- ]?phase)\b", re.IGNORECASE)
-POLE_REGEX = re.compile(r"\b(\d)[ -]?(pole|p)\b", re.IGNORECASE)
+POLE_REGEX  = re.compile(r"\b(\d)[ -]?(pole|p)\b", re.IGNORECASE)
 
-
+# ---------- Data model ----------
 @dataclass
 class ParsedSpecs:
     product_type: str = ""         # panel, breaker, receptacle, plug, evse, unknown
@@ -64,7 +64,7 @@ class ParsedSpecs:
     plug_config: str = ""          # e.g., NEMA 14-50
     raw_excerpt: str = ""          # for debugging / audit
 
-
+# ---------- Parsing ----------
 def detect_product_type(text: str) -> str:
     t = text.lower()
     if any(k in t for k in ["load center", "panelboard", "loadcenter", "panel "]):
@@ -79,18 +79,17 @@ def detect_product_type(text: str) -> str:
         return "evse"
     return "unknown"
 
-
 def parse_product_info(pasted: str) -> ParsedSpecs:
     text = " " + re.sub(r"\s+", " ", pasted).strip() + " "
     ps = ParsedSpecs(raw_excerpt=pasted[:800])
 
-    # Brand & Series heuristic
+    # Brand guess
     for brand in BRANDS:
         if brand.lower() in text.lower():
             ps.brand = brand
             break
 
-    # series tokens
+    # Series guess
     for token, (brand_guess, series_guess) in SERIES_TOKENS.items():
         if token.lower() in text.lower():
             ps.series = series_guess
@@ -98,15 +97,14 @@ def parse_product_info(pasted: str) -> ParsedSpecs:
                 ps.brand = brand_guess
             break
 
-    # simple model capture (alphanumeric with dashes)
+    # Simple model capture (alphanumeric with dashes)
     m_model = re.search(r"\b([A-Z0-9-]{4,})\b", text, re.IGNORECASE)
     if m_model:
         ps.model = m_model.group(1)
 
-    # electrical basics
+    # Electrical basics
     m_volt = VOLT_REGEX.search(text)
     if m_volt:
-        # pick the first non-None group
         for g in m_volt.groups():
             if g:
                 ps.voltage = f"{g}V"
@@ -122,10 +120,7 @@ def parse_product_info(pasted: str) -> ParsedSpecs:
     m_phase = PHASE_REGEX.search(text)
     if m_phase:
         token = m_phase.group(0).lower()
-        if "3" in token:
-            ps.phase = "3Ø"
-        else:
-            ps.phase = "1Ø"
+        ps.phase = "3Ø" if "3" in token else "1Ø"
 
     m_poles = POLE_REGEX.search(text)
     if m_poles:
@@ -145,20 +140,15 @@ def parse_product_info(pasted: str) -> ParsedSpecs:
     ps.product_type = detect_product_type(text)
     return ps
 
-
+# ---------- Rule helpers ----------
 def series_breaker_families(brand: str, series: str) -> List[str]:
     brands = RULES.get("brands", {})
     if brand in brands and "series" in brands[brand] and series in brands[brand]["series"]:
         return brands[brand]["series"][series]["breaker_families"]
     return []
 
-
 def check_panel_breaker_compat(ps_panel: ParsedSpecs, ps_breaker: ParsedSpecs) -> Dict[str, Any]:
-    result = {
-        "compatible": False,
-        "reasons": [],
-        "suggestions": []
-    }
+    result = {"compatible": False, "reasons": [], "suggestions": []}
 
     if ps_panel.product_type != "panel" or ps_breaker.product_type != "breaker":
         result["reasons"].append("Product types must be a panel and a breaker.")
@@ -193,14 +183,13 @@ def check_panel_breaker_compat(ps_panel: ParsedSpecs, ps_breaker: ParsedSpecs) -
         result["reasons"].append("Breaker amp rating exceeds panel main rating; verify application.")
 
     if ps_panel.phase and ps_breaker.poles:
-        # Simple sanity: 3Ø often uses 2P/3P; 1Ø uses 1P/2P. This is not a hard rule, just a hint.
-        if ps_panel.phase == "1Ø" and ps_breaker.poles not in (1,2):
+        # Not strict code—just hints
+        if ps_panel.phase == "1Ø" and ps_breaker.poles not in (1, 2):
             result["reasons"].append("Pole count atypical for single-phase panels (check spec).")
-        if ps_panel.phase == "3Ø" and ps_breaker.poles not in (2,3):
+        if ps_panel.phase == "3Ø" and ps_breaker.poles not in (2, 3):
             result["reasons"].append("Pole count atypical for three-phase panels (check spec).")
 
     return result
-
 
 def check_plug_receptacle(ps_a: ParsedSpecs, ps_b: ParsedSpecs) -> Dict[str, Any]:
     # Match either direction
@@ -222,14 +211,14 @@ def check_plug_receptacle(ps_a: ParsedSpecs, ps_b: ParsedSpecs) -> Dict[str, Any
         return result
 
     if config in details:
-        # If one side has a known config, assume match if the other is generic receptacle/plug.
         result["compatible"] = True
-        result["suggestions"].append(f"Both should be {config}. Verify voltage/amp rating: {details[config]['voltage']} / {details[config]['amps']}A.")
+        result["suggestions"].append(
+            f"Both should be {config}. Verify voltage/amp rating: {details[config]['voltage']} / {details[config]['amps']}A."
+        )
     else:
         result["reasons"].append("NEMA configuration not recognized in rule set (expand rules).")
 
     return result
-
 
 def check_enclosure(ps: ParsedSpecs, required_env: str) -> Dict[str, Any]:
     # Compare required environment (e.g., '3R' for outdoor) with product's NEMA enclosure
@@ -251,7 +240,6 @@ def check_enclosure(ps: ParsedSpecs, required_env: str) -> Dict[str, Any]:
 
     return result
 
-
 def ev_breaker_sizing(evse_amp_output: int) -> Dict[str, Any]:
     # 125% rule (simplified): choose next standard breaker size at/above 1.25x
     target = int(round(evse_amp_output * 1.25))
@@ -261,27 +249,25 @@ def ev_breaker_sizing(evse_amp_output: int) -> Dict[str, Any]:
         "evse_output_amps": evse_amp_output,
         "min_circuit_amps": target,
         "recommended_breaker": chosen,
-        "note": RULES["ev_charger_rules"]["note"]
+        "note": RULES["ev_charger_rules"]["note"],
     }
-
 
 def section_header(title: str, subtitle: str = ""):
     st.markdown(f"### {title}")
     if subtitle:
         st.caption(subtitle)
 
-
+# ---------- UI ----------
 def main():
-    
     st.title("Compatibility Checker (v1)")
     st.write("Reduce purchase doubt by verifying that parts work together. Paste specs now; enable URL mode later.")
 
     with st.expander("Input mode", expanded=True):
-        mode = st.radio("Choose how you'll provide product info:", [
-            "Paste product information (recommended)",
-            "URL (placeholder – disabled until crawling allowed)"
-        ], index=0)
-
+        mode = st.radio(
+            "Choose how you'll provide product info:",
+            ["Paste product information (recommended)", "URL (placeholder – disabled until crawling allowed)"],
+            index=0,
+        )
         if mode == "URL (placeholder – disabled until crawling allowed)":
             st.text_input("Product URL", placeholder="https://www.example.com/your-product")
             st.info("Your site currently blocks bots. Keep this for later; we’ll wire it when permitted.")
@@ -290,15 +276,25 @@ def main():
     colA, colB = st.columns(2)
     with colA:
         section_header("Item A")
-        a_text = st.text_area("Paste product info, HTML, or spec text (Item A)", height=180, placeholder="e.g., Square D QO load center 1Ø 120/240V, 200A, NEMA 3R")
+        a_text = st.text_area(
+            "Paste product info, HTML, or spec text (Item A)",
+            height=180,
+            placeholder="e.g., Square D QO load center 1Ø 120/240V, 200A, NEMA 3R",
+        )
         btn_a = st.button("Parse Item A")
     with colB:
         section_header("Item B")
-        b_text = st.text_area("Paste product info, HTML, or spec text (Item B)", height=180, placeholder="e.g., Square D QO120 breaker 1P 20A")
+        b_text = st.text_area(
+            "Paste product info, HTML, or spec text (Item B)",
+            height=180,
+            placeholder="e.g., Square D QO120 breaker 1P 20A",
+        )
         btn_b = st.button("Parse Item B")
 
-    if "ps_a" not in st.session_state: st.session_state.ps_a = None
-    if "ps_b" not in st.session_state: st.session_state.ps_b = None
+    if "ps_a" not in st.session_state:
+        st.session_state.ps_a = None
+    if "ps_b" not in st.session_state:
+        st.session_state.ps_b = None
 
     if btn_a and a_text.strip():
         st.session_state.ps_a = parse_product_info(a_text)
@@ -315,7 +311,11 @@ def main():
                 return None
             cols = st.columns(3)
             with cols[0]:
-                pt = st.selectbox(f"{label} type", ["unknown", "panel", "breaker", "receptacle", "plug", "evse"], index=["unknown","panel","breaker","receptacle","plug","evse"].index(parsed.product_type))
+                pt = st.selectbox(
+                    f"{label} type",
+                    ["unknown", "panel", "breaker", "receptacle", "plug", "evse"],
+                    index=["unknown", "panel", "breaker", "receptacle", "plug", "evse"].index(parsed.product_type),
+                )
                 brand = st.text_input(f"{label} brand", value=parsed.brand)
                 series = st.text_input(f"{label} series", value=parsed.series)
             with cols[1]:
@@ -330,9 +330,17 @@ def main():
             raw = st.text_area(f"{label} raw excerpt (reference)", value=parsed.raw_excerpt, height=80)
 
             out = ParsedSpecs(
-                product_type=pt, brand=brand, series=series, model=model, voltage=voltage,
-                phase=phase, amps=(amps or None), poles=(poles or None), nema_enclosure=nema,
-                plug_config=plug, raw_excerpt=raw
+                product_type=pt,
+                brand=brand,
+                series=series,
+                model=model,
+                voltage=voltage,
+                phase=phase,
+                amps=(amps or None),
+                poles=(poles or None),
+                nema_enclosure=nema,
+                plug_config=plug,
+                raw_excerpt=raw,
             )
             return out
 
@@ -350,7 +358,9 @@ def main():
 
         # Panel ↔ Breaker
         if ps_a and ps_b:
-            if (ps_a.product_type == "panel" and ps_b.product_type == "breaker") or (ps_b.product_type == "panel" and ps_a.product_type == "breaker"):
+            if (ps_a.product_type == "panel" and ps_b.product_type == "breaker") or (
+                ps_b.product_type == "panel" and ps_a.product_type == "breaker"
+            ):
                 panel = ps_a if ps_a.product_type == "panel" else ps_b
                 breaker = ps_b if panel == ps_a else ps_a
                 res = check_panel_breaker_compat(panel, breaker)
@@ -358,7 +368,9 @@ def main():
                 st.write(res)
                 if res.get("compatible"):
                     fams = series_breaker_families(panel.brand, panel.series)
-                    st.success(f"Compatible. Accepted breaker families for {panel.brand} {panel.series}: {', '.join(fams)}")
+                    st.success(
+                        f"Compatible. Accepted breaker families for {panel.brand} {panel.series}: {', '.join(fams)}"
+                    )
                 else:
                     for r in res.get("reasons", []):
                         st.error(r)
@@ -405,7 +417,9 @@ def main():
     if ev_amp:
         ev = ev_breaker_sizing(ev_amp)
         st.write(ev)
-        st.success(f"Recommend a breaker around {ev['recommended_breaker']}A (≥ {ev['min_circuit_amps']}A). {ev['note']}")
+        st.success(
+            f"Recommend a breaker around {ev['recommended_breaker']}A (≥ {ev['min_circuit_amps']}A). {ev['note']}"
+        )
 
     # -----------------------------------------------------
     # Next steps / CTA
@@ -414,18 +428,18 @@ def main():
     section_header("Next steps / CTA")
 
     routes = RULES.get("routes", {})
-    buttons = []
+    buttons: List[tuple[str, str]] = []
 
     # Prefer panel context to build deep links
-    panel = None
-    breaker = None
-    if st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "panel":
+    panel: Optional[ParsedSpecs] = None
+    breaker: Optional[ParsedSpecs] = None
+    if st.session_state.get("ps_a") and st.session_state.ps_a and st.session_state.ps_a.product_type == "panel":
         panel = st.session_state.ps_a
-    if st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "panel":
+    if st.session_state.get("ps_b") and st.session_state.ps_b and st.session_state.ps_b.product_type == "panel":
         panel = st.session_state.ps_b
-    if st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "breaker":
+    if st.session_state.get("ps_a") and st.session_state.ps_a and st.session_state.ps_a.product_type == "breaker":
         breaker = st.session_state.ps_a
-    if st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "breaker":
+    if st.session_state.get("ps_b") and st.session_state.ps_b and st.session_state.ps_b.product_type == "breaker":
         breaker = st.session_state.ps_b
 
     q = brand_series_query(panel.brand, panel.series) if panel else ""
@@ -437,10 +451,14 @@ def main():
         buttons.append(("Shop matching panels", routes["panels"] + q if q else routes["panels"]))
 
     # Plug / receptacle context
-    has_plug = any([(st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "plug"),
-                    (st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "plug")])
-    has_recept = any([(st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "receptacle"),
-                      (st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "receptacle")])
+    has_plug = any([
+        (st.session_state.get("ps_a") and st.session_state.ps_a and st.session_state.ps_a.product_type == "plug"),
+        (st.session_state.get("ps_b") and st.session_state.ps_b and st.session_state.ps_b.product_type == "plug"),
+    ])
+    has_recept = any([
+        (st.session_state.get("ps_a") and st.session_state.ps_a and st.session_state.ps_a.product_type == "receptacle"),
+        (st.session_state.get("ps_b") and st.session_state.ps_b and st.session_state.ps_b.product_type == "receptacle"),
+    ])
     if has_plug and routes.get("receptacles"):
         buttons.append(("Shop matching receptacles", routes["receptacles"]))
     if has_recept and routes.get("plugs"):
@@ -460,7 +478,11 @@ def main():
         label1, url1 = buttons[i]
         c1.link_button(label1, url1)
         if i + 1 < len(buttons):
-            label2, url2 = buttons[i+1]
+            label2, url2 = buttons[i + 1]
             c2.link_button(label2, url2)
 
     st.caption(RULES.get("disclaimer", ""))
+
+# ---------- Run ----------
+if __name__ == "__main__":
+    main()
