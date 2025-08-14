@@ -1,5 +1,13 @@
 {
-  "brands": {
+  "routes": {
+  "breakers": "https://www.cityelectricsupply.com/circuit-breakers",
+  "panels": "https://www.cityelectricsupply.com/panelboards-load-centers",
+  "receptacles": "https://www.cityelectricsupply.com/receptacles-3",
+  "plugs": "https://www.cityelectricsupply.com/search?searchTerm=plugs",
+  "ev": "https://www.cityelectricsupply.com/ev-charging-stations-2",
+  "accessories": "https://www.cityelectricsupply.com/meter-base-accessories"
+},
+"brands": {
     "Square D": {
       "series": {
         "QO": {
