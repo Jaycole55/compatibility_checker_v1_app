@@ -425,6 +425,10 @@ def main():
     # Next steps / CTA
     # -----------------------------------------------------
     st.markdown("---")
+    st.caption(f"DEBUG routes: {bool(RULES.get('routes'))}")
+# or to inspect the actual dict:
+# st.json(RULES.get("routes", {}))
+
     section_header("Next steps / CTA")
 
     routes = RULES.get("routes", {})
