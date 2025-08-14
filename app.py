@@ -396,65 +396,71 @@ def main():
             else:
                 st.info("Parse at least one item to run enclosure check.")
 
-        # EV Charger helper
-        st.subheader("EV Charger Circuit Helper")
-        ev_amp = st.number_input("EVSE output current (A)", min_value=0, max_value=100, value=0, step=2, help="Nameplate continuous current output of the charger.")
-        if ev_amp:
-            ev = ev_breaker_sizing(ev_amp)
-            st.write(ev)
-            st.success(f"Recommend a breaker around {ev['recommended_breaker']}A (≥ {ev['min_circuit_amps']}A). {ev['note']}")
+    # EV Charger helper
+    st.subheader("EV Charger Circuit Helper")
+    ev_amp = st.number_input(
+        "EVSE output current (A)", min_value=0, max_value=100, value=0, step=2,
+        help="Nameplate continuous current output of the charger."
+    )
+    if ev_amp:
+        ev = ev_breaker_sizing(ev_amp)
+        st.write(ev)
+        st.success(f"Recommend a breaker around {ev['recommended_breaker']}A (≥ {ev['min_circuit_amps']}A). {ev['note']}")
 
-       st.markdown("---")
-section_header("Next steps / CTA")
+    # -----------------------------------------------------
+    # Next steps / CTA
+    # -----------------------------------------------------
+    st.markdown("---")
+    section_header("Next steps / CTA")
 
-routes = RULES.get("routes", {})
-buttons = []
+    routes = RULES.get("routes", {})
+    buttons = []
 
-# Prefer panel context to build deep links
-panel = None
-breaker = None
-if st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "panel":
-    panel = st.session_state.ps_a
-if st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "panel":
-    panel = st.session_state.ps_b
-if st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "breaker":
-    breaker = st.session_state.ps_a
-if st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "breaker":
-    breaker = st.session_state.ps_b
+    # Prefer panel context to build deep links
+    panel = None
+    breaker = None
+    if st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "panel":
+        panel = st.session_state.ps_a
+    if st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "panel":
+        panel = st.session_state.ps_b
+    if st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "breaker":
+        breaker = st.session_state.ps_a
+    if st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "breaker":
+        breaker = st.session_state.ps_b
 
-q = brand_series_query(panel.brand, panel.series) if panel else ""
+    q = brand_series_query(panel.brand, panel.series) if panel else ""
 
-# Build buttons based on what the user is checking
-if routes.get("breakers"):
-    buttons.append(("Shop compatible breakers", routes["breakers"] + q if q else routes["breakers"]))
-if routes.get("panels"):
-    buttons.append(("Shop matching panels", routes["panels"] + q if q else routes["panels"]))
+    # Build buttons based on what the user is checking
+    if routes.get("breakers"):
+        buttons.append(("Shop compatible breakers", routes["breakers"] + q if q else routes["breakers"]))
+    if routes.get("panels"):
+        buttons.append(("Shop matching panels", routes["panels"] + q if q else routes["panels"]))
 
-# Plug / receptacle context
-has_plug = any([(st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "plug"),
-                (st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "plug")])
-has_recept = any([(st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "receptacle"),
-                  (st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "receptacle")])
-if has_plug and routes.get("receptacles"):
-    buttons.append(("Shop matching receptacles", routes["receptacles"]))
-if has_recept and routes.get("plugs"):
-    buttons.append(("Shop matching plugs", routes["plugs"]))
+    # Plug / receptacle context
+    has_plug = any([(st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "plug"),
+                    (st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "plug")])
+    has_recept = any([(st.session_state.get("ps_a") and st.session_state.ps_a.product_type == "receptacle"),
+                      (st.session_state.get("ps_b") and st.session_state.ps_b.product_type == "receptacle")])
+    if has_plug and routes.get("receptacles"):
+        buttons.append(("Shop matching receptacles", routes["receptacles"]))
+    if has_recept and routes.get("plugs"):
+        buttons.append(("Shop matching plugs", routes["plugs"]))
 
-# EV helper
-if routes.get("ev"):
-    buttons.append(("Shop EV chargers", routes["ev"]))
+    # EV category CTA
+    if routes.get("ev"):
+        buttons.append(("Shop EV chargers", routes["ev"]))
 
-# Accessories for panels
-if panel and routes.get("accessories"):
-    buttons.append(("Panel accessories (hubs, ground bars, covers)", routes["accessories"] + q if q else routes["accessories"]))
+    # Accessories for panels
+    if panel and routes.get("accessories"):
+        buttons.append(("Panel accessories (hubs, ground bars, covers)", routes["accessories"] + q if q else routes["accessories"]))
 
-# Render buttons 2 per row
-for i in range(0, len(buttons), 2):
-    c1, c2 = st.columns(2)
-    label1, url1 = buttons[i]
-    c1.link_button(label1, url1)
-    if i + 1 < len(buttons):
-        label2, url2 = buttons[i+1]
-        c2.link_button(label2, url2)
+    # Render buttons 2 per row
+    for i in range(0, len(buttons), 2):
+        c1, c2 = st.columns(2)
+        label1, url1 = buttons[i]
+        c1.link_button(label1, url1)
+        if i + 1 < len(buttons):
+            label2, url2 = buttons[i+1]
+            c2.link_button(label2, url2)
 
-st.caption(RULES.get("disclaimer", ""))
+    st.caption(RULES.get("disclaimer", ""))
